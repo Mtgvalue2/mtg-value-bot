@@ -1,4 +1,5 @@
 ﻿import os
+import json
 from dotenv import load_dotenv
 import logging
 from telegram.ext import Application, CommandHandler, ContextTypes, JobQueue
@@ -19,16 +20,53 @@ logging.basicConfig(
 # Cargar variables de entorno
 load_dotenv()
 
+# Archivos del sistema
+HISTORIAL_FILE = "precios_historicos.json"
+CACHE_FILE = "data/cache_cards.json"
+USUARIOS_FILE = "usuarios_activos.json"
+
 # Importar funciones del backend
 from backend.mtg_core import buscar_carta, obtener_todas_ediciones, cargar_historial
 
 # Variables globales
 seguimiento_activo = False
 cartas_seguimiento = ["Black Knight", "Force of Will", "Ancestral Recall"]
-intervalo_dias = 1
 alertas_activas = False
+intervalo_dias = 1
+
+# Registro de usuarios
+if os.path.exists(USUARIOS_FILE):
+    with open(USUARIOS_FILE, "r") as f:
+        usuarios_registrados = set(json.load(f))
+else:
+    usuarios_registrados = set()
+
+def guardar_usuarios():
+    """Guardar usuarios registrados en un archivo"""
+    with open(USUARIOS_FILE, "w") as f:
+        json.dump(list(usuarios_registrados), f, indent=2)
+
+async def informar_admin(context: ContextTypes.DEFAULT_TYPE, mensaje: str):
+    """Enviar mensaje al admin si se define ADMIN_CHAT_ID"""
+    admin_id = os.getenv("ADMIN_CHAT_ID")
+    if not admin_id:
+        return
+    try:
+        await context.bot.send_message(chat_id=admin_id, text=mensaje)
+    except Exception as e:
+        print(f"❌ No se pudo enviar mensaje al admin: {str(e)}")
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    nombre_usuario = update.effective_user.username or f"user_{chat_id}"
+    
+    # Registrar nuevo usuario
+    if chat_id not in usuarios_registrados:
+        usuarios_registrados.add(chat_id)
+        guardar_usuarios()
+        logging.info(f"🟢 Nuevo usuario: {chat_id} ({nombre_usuario})")
+        await informar_admin(context, f"🆕 Usuario nuevo: {chat_id} ({nombre_usuario}) usó /start")
+
     texto = "👋 ¡Hola! Soy MTGValueBot.\n"
     texto += "📌 Comandos disponibles:\n"
     texto += "/buscar <nombre> [edición] – Consultar carta\n"
@@ -39,24 +77,33 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     texto += "/editar_lista add/remove <nombre> – Editar lista de seguimiento\n"
     texto += "/top_inversiones – Ver las mejores inversiones de la semana\n"
     texto += "/activar_alertas – Recibir notificaciones automáticas\n"
-    texto += "/desactivar_alertas – Dejar de recibir notificaciones"
+    texto += "/desactivar_alertas – Dejar de recibir notificaciones\n"
+    texto += "/estadisticas – Ver estadísticas del bot (solo administrador)"
     await update.message.reply_text(texto)
 
 async def buscar(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    nombre_usuario = update.effective_user.username or f"user_{chat_id}"
+    logging.info(f"🧾 Usuario '{nombre_usuario}' ({chat_id}) usó /buscar con args: {context.args}")
+    await informar_admin(context, f"🧾 Usuario {chat_id} ({nombre_usuario}) usó /buscar `{context.args}`")
+
     if not context.args:
         await update.message.reply_text("Por favor, escribe el nombre de una carta. Ejemplo: /buscar Force of Will Unlimited")
         return
+    
     nombre_completo = " ".join(context.args).strip()
     palabras = context.args
     ediciones_clave = ["alpha", "beta", "unlimited", "promo", "foil", "modern", "commander", "standard"]
     edicion_input = None
     nombre = nombre_completo
+    
     for i in range(len(palabras), 0, -1):
         posible_edicion = " ".join(palabras[i-1:])
         if any(ed in posible_edicion.lower() for ed in ediciones_clave):
             nombre = " ".join(palabras[:i-1]) or palabras[0]
             edicion_input = posible_edicion
             break
+
     resultado = buscar_carta(nombre, edicion_input)
     if "error" in resultado and "nombre" not in resultado:
         todas_ediciones = obtener_todas_ediciones(nombre)
@@ -69,6 +116,7 @@ async def buscar(update: Update, context: ContextTypes.DEFAULT_TYPE):
         texto += "\n👉 Usa `/buscar <nombre> <edición>` para ver detalles."
         await update.message.reply_text(texto, parse_mode="Markdown")
         return
+
     texto = f"🎴 *{resultado['nombre']}*\n"
     texto += f"📦 Edición: {resultado.get('edicion', 'No disponible')}\n"
     texto += f"💰 Precio Actual: ${round(float(resultado['precio']), 2):.2f}\n"
@@ -77,10 +125,11 @@ async def buscar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if "predicciones" in resultado and isinstance(resultado["predicciones"], list) and len(resultado["predicciones"]) >= 6:
         texto += "\n🔮 Predicción de precios futuros (6 meses):\n"
         for i, p in enumerate(resultado["predicciones"][:6], 1):
-            fecha_pred = datetime.strptime(p[0], "%Y-%m-%d") if isinstance(p[0], str) else datetime.now() + timedelta(days=i*30)
+            fecha_pred = datetime.now() + timedelta(days=i*30)
             texto += f"{fecha_pred.strftime('%Y-%m-%d')}: ${float(p):.2f}\n"
     else:
         texto += "\n📉 Datos insuficientes para predicción."
+
     await update.message.reply_text(texto, parse_mode="Markdown")
 
     # Mostrar imagen si hay
@@ -139,6 +188,11 @@ async def buscar(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(f"⚠️ No se pudo generar el gráfico de predicción: {str(e)}")
 
 async def listar_ediciones(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    nombre_usuario = update.effective_user.username or f"user_{chat_id}"
+    logging.info(f"🧾 Usuario '{nombre_usuario}' ({chat_id}) usó /listar_ediciones con args: {context.args}")
+    await informar_admin(context, f"🧾 {nombre_usuario} ({chat_id}) usó /listar_ediciones `{context.args}`")
+
     if not context.args:
         await update.message.reply_text("Por favor, escribe el nombre de una carta. Ejemplo: /listar_ediciones Black Knight")
         return
@@ -154,6 +208,11 @@ async def listar_ediciones(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(texto, parse_mode="Markdown")
 
 async def ver_historial(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    nombre_usuario = update.effective_user.username or f"user_{chat_id}"
+    logging.info(f"🧾 Usuario '{nombre_usuario}' ({chat_id}) usó /ver_historial con args: {context.args}")
+    await informar_admin(context, f"🧾 {nombre_usuario} ({chat_id}) usó /ver_historial `{context.args}`")
+
     if not context.args:
         await update.message.reply_text("Por favor, escribe el nombre de una carta. Ejemplo: /ver_historial Black Knight")
         return
@@ -172,6 +231,11 @@ async def ver_historial(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def seguir(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global seguimiento_activo
+    chat_id = update.effective_chat.id
+    nombre_usuario = update.effective_user.username or f"user_{chat_id}"
+    logging.info(f"🧾 Usuario '{nombre_usuario}' ({chat_id}) usó /seguimiento")
+    await informar_admin(context, f"🧾 {nombre_usuario} ({chat_id}) activó /seguimiento")
+
     if seguimiento_activo:
         await update.message.reply_text("👀 Ya está activo el seguimiento.")
         return
@@ -214,6 +278,11 @@ async def monitor_seguimiento(context: ContextTypes.DEFAULT_TYPE):
 
 async def detener_seguimiento(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global seguimiento_activo
+    chat_id = update.effective_chat.id
+    nombre_usuario = update.effective_user.username or f"user_{chat_id}"
+    logging.info(f"🧾 Usuario '{nombre_usuario}' ({chat_id}) usó /detener_seguimiento")
+    await informar_admin(context, f"🧾 {nombre_usuario} ({chat_id}) desactivó el seguimiento")
+
     if not seguimiento_activo:
         await update.message.reply_text("🛑 No hay seguimiento activo.")
         return
@@ -223,11 +292,16 @@ async def detener_seguimiento(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 async def editar_lista(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global cartas_seguimiento
+    chat_id = update.effective_chat.id
+    nombre_usuario = update.effective_user.username or f"user_{chat_id}"
     if not context.args:
         await update.message.reply_text("Uso: `/editar_lista add <nombre>` o `/editar_lista remove <nombre>`", parse_mode="Markdown")
         return
     accion = context.args[0].lower()
     nombre = " ".join(context.args[1:]).strip()
+    logging.info(f"🧾 Usuario '{nombre_usuario}' ({chat_id}) usó /editar_lista {accion} {nombre}")
+    await informar_admin(context, f"🧾 {nombre_usuario} ({chat_id}) editó la lista: {accion} {nombre}")
+
     if accion == "add":
         if nombre not in cartas_seguimiento:
             cartas_seguimiento.append(nombre)
@@ -245,17 +319,22 @@ async def editar_lista(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def top_inversiones(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Mostrar las 10 cartas con mayor aumento de precio esta semana"""
+    chat_id = update.effective_chat.id
+    nombre_usuario = update.effective_user.username or f"user_{chat_id}"
+    logging.info(f"🧾 Usuario '{nombre_usuario}' ({chat_id}) usó /top_inversiones")
+    await informar_admin(context, f"🧾 {nombre_usuario} ({chat_id}) usó /top_inversiones")
+
     historial = cargar_historial()
     if not historial:
         await update.message.reply_text("📉 No hay datos suficientes para calcular inversiones.")
         return
-    resultados = []
+
+    resultados_ascenso = []
     for clave in historial:
         registros = historial[clave]
         if len(registros) >= 2:
             primer_registro = registros[0]
             ultimo_registro = registros[-1]
-            fecha_inicio = datetime.strptime(primer_registro["fecha"], "%Y-%m-%d %H:%M")
             fecha_fin = datetime.strptime(ultimo_registro["fecha"], "%Y-%m-%d %H:%M")
             dias_cambio = (datetime.now() - fecha_fin).days
             if dias_cambio > 7:
@@ -264,108 +343,74 @@ async def top_inversiones(update: Update, context: ContextTypes.DEFAULT_TYPE):
             precio_fin = float(ultimo_registro["precio"])
             if precio_inicio > 0 and precio_fin > 0:
                 cambio_porcentaje = ((precio_fin - precio_inicio) / precio_inicio) * 100
-                resultados.append({
+                resultados_ascenso.append({
                     "nombre": clave.split(" - ")[0],
                     "inicio": precio_inicio,
                     "fin": precio_fin,
                     "cambio": cambio_porcentaje
                 })
-    if not resultados:
+
+    if not resultados_ascenso:
         await update.message.reply_text("🔍 No hay movimientos significativos esta semana.")
         return
+
     # Ordenar por porcentaje descendente
-    resultados.sort(key=lambda x: x["cambio"], reverse=True)
-    texto = "📈 *Top 10 Inversiones MTG (última semana)*\n\n"
-    for idx, item in enumerate(resultados[:10], 1):
+    resultados_ascenso.sort(key=lambda x: x["cambio"], reverse=True)
+
+    texto = "📈 *Top Inversiones MTG (última semana)*\n\n"
+    for idx, item in enumerate(resultados_ascenso[:10], 1):
         texto += f"{idx}. {item['nombre']}\n"
         texto += f"   💸 De ${item['inicio']:.2f} → ${item['fin']:.2f} (+{item['cambio']:.2f}%)\n\n"
+
     await update.message.reply_text(texto, parse_mode="Markdown")
 
     # Gráfico opcional
-    if resultados:
-        nombres_graf, inicio_graf, fin_graf, porcentaje_graf = zip(*[(x["nombre"], x["inicio"], x["fin"], x["cambio"]) for x in resultados[:10]])
-        plt.style.use('dark_background')
-        fig, ax = plt.subplots(figsize=(12, 6))
-        scatter = ax.scatter(inicio_graf, porcentaje_graf, s=100, c=porcentaje_graf, cmap="viridis", alpha=0.9)
-        ax.set_title("📊 Top Cartas: Porcentaje de Subida vs Precio Actual", fontsize=14, pad=20)
-        ax.set_xlabel("Precio Actual (USD)", fontsize=12)
-        ax.set_ylabel("Cambio (%)", fontsize=12)
-        ax.grid(True, linestyle='--', alpha=0.5)
-        for i, nombre in enumerate(nombres_graf):
-            ax.text(inicio_graf[i], porcentaje_graf[i], nombre, fontsize=9, ha='right')
-        plt.colorbar(scatter, label="Cambio (%)")
-        plt.tight_layout()
-        plt.savefig("grafico_top_inversiones.png", dpi=150, bbox_inches='tight')
-        plt.close()
-        await update.message.reply_document(document=open("grafico_top_inversiones.png", "rb"))
+    nombres_graf, inicio_graf, fin_graf, porcentaje_graf = [], [], [], []
+    for item in resultados_ascenso[:10]:
+        nombres_graf.append(item["nombre"])
+        inicio_graf.append(item["inicio"])
+        fin_graf.append(item["fin"])
+        porcentaje_graf.append(item["cambio"])
 
-async def activar_alertas(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global alertas_activas
-    if alertas_activas:
-        await update.message.reply_text("🔔 Alertas ya están activas.")
+    plt.style.use('dark_background')
+    fig, ax = plt.subplots(figsize=(12, 6))
+    scatter = ax.scatter(inicio_graf, porcentaje_graf, s=100, c=porcentaje_graf, cmap="viridis", alpha=0.9)
+    ax.set_title("📊 Top Cartas: Porcentaje de Subida vs Precio Actual", fontsize=14, pad=20)
+    ax.set_xlabel("Precio Actual (USD)", fontsize=12)
+    ax.set_ylabel("Cambio (%)", fontsize=12)
+    ax.grid(True, linestyle='--', alpha=0.5)
+    for i, nombre in enumerate(nombres_graf):
+        ax.text(inicio_graf[i], porcentaje_graf[i], nombre, fontsize=9, ha='right')
+    plt.colorbar(scatter, label="Cambio (%)")
+    plt.tight_layout()
+    plt.savefig("grafico_top_inversiones.png", dpi=150, bbox_inches='tight')
+    plt.close()
+
+    await update.message.reply_document(document=open("grafico_top_inversiones.png", "rb"))
+
+async def estadisticas(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    nombre_usuario = update.effective_user.username or f"user_{chat_id}"
+    logging.info(f"🧾 Usuario '{nombre_usuario}' ({chat_id}) usó /estadisticas")
+    await informar_admin(context, f"🧾 {nombre_usuario} ({chat_id}) consultó /estadisticas")
+
+    admin_id = os.getenv("ADMIN_CHAT_ID")
+    if str(chat_id) != admin_id:
+        await update.message.reply_text("🚫 Acceso denegado.")
         return
-    alertas_activas = True
-    await update.message.reply_text("✅ Alertas automáticas activadas. Revisaré oportunidades cada 6 horas.")
-    job_queue = context.job_queue
-    job_queue.run_repeating(monitor_alertas, interval=21600, first=10, chat_id=update.effective_chat.id)
 
-async def monitor_alertas(context: ContextTypes.DEFAULT_TYPE):
     historial = cargar_historial()
-    if not historial:
-        return
-    resultados = []
-    for clave in historial:
-        registros = historial[clave]
-        if len(registros) >= 2:
-            primer_registro = registros[0]
-            ultimo_registro = registros[-1]
-            fecha_fin = datetime.strptime(ultimo_registro["fecha"], "%Y-%m-%d %H:%M")
-            dias_cambio = (datetime.now() - fecha_fin).days
-            if dias_cambio <= 7:
-                precio_inicio = float(primer_registro["precio"])
-                precio_fin = float(ultimo_registro["precio"])
-                if precio_inicio > 0 and precio_fin > 0:
-                    cambio_porcentaje = ((precio_fin - precio_inicio) / precio_inicio) * 100
-                    if cambio_porcentaje >= 2.0:
-                        resultados.append({
-                            "nombre": clave.split(" - ")[0],
-                            "inicio": precio_inicio,
-                            "fin": precio_fin,
-                            "cambio": cambio_porcentaje
-                        })
-    if not resultados:
-        return
-    texto = "🔔 *Alerta Automática – Oportunidades detectadas*\n\n"
-    for idx, item in enumerate(resultados[:5], 1):
-        texto += f"{idx}. {item['nombre']}\n"
-        texto += f"   💸 De ${item['inicio']:.2f} → ${item['fin']:.2f} (+{item['cambio']:.2f}%)\n\n"
-    await context.bot.send_message(chat_id=context.job.chat_id, text=texto, parse_mode="Markdown")
-    # Enviar gráfico
-    if resultados:
-        nombres_graf, inicio_graf, _, porcentaje_graf = zip(*[(x["nombre"], x["inicio"], x["fin"], x["cambio"]) for x in resultados[:10]])
-        plt.style.use('dark_background')
-        fig, ax = plt.subplots(figsize=(12, 6))
-        scatter = ax.scatter(inicio_graf, porcentaje_graf, s=100, c=porcentaje_graf, cmap="viridis", alpha=0.9)
-        ax.set_title("📉 Alerta – Oportunidades Detectadas", fontsize=14, pad=20)
-        ax.set_xlabel("Precio Actual (USD)", fontsize=12)
-        ax.set_ylabel("Cambio (%)", fontsize=12)
-        ax.grid(True, linestyle='--', alpha=0.5)
-        for i, nombre in enumerate(nombres_graf):
-            ax.text(inicio_graf[i], porcentaje_graf[i], nombre, fontsize=9, ha='right')
-        plt.colorbar(scatter, label="Cambio (%)")
-        plt.tight_layout()
-        plt.savefig("grafico_alertas_auto.png", dpi=150, bbox_inches='tight')
-        plt.close()
-        await context.bot.send_document(chat_id=context.job.chat_id, document=open("grafico_alertas_auto.png", "rb"))
+    num_cartas = len(historial)
+    usuarios_unicos = len(usuarios_registrados)
 
-async def desactivar_alertas(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global alertas_activas
-    if not alertas_activas:
-        await update.message.reply_text("🛑 Las alertas ya están desactivadas.")
-        return
-    context.job_queue.stop()
-    alertas_activas = False
-    await update.message.reply_text("🔕 Alertas automáticas desactivadas.")
+    texto = "📊 *Estadísticas del Bot*\n\n"
+    texto += f"👥 Usuarios únicos: {usuarios_unicos}\n"
+    texto += f"🎴 Cartas registradas: {num_cartas}\n"
+    texto += "\n👉 Últimos usuarios:\n"
+    for u in list(usuarios_registrados)[-5:]:
+        texto += f"- {u}\n"
+    
+    await update.message.reply_text(texto, parse_mode="Markdown")
 
 def main():
     application = Application.builder().token(os.getenv("TELEGRAM_BOT_TOKEN")).build()
@@ -377,9 +422,9 @@ def main():
     application.add_handler(CommandHandler("detener_seguimiento", detener_seguimiento))
     application.add_handler(CommandHandler("editar_lista", editar_lista))
     application.add_handler(CommandHandler("top_inversiones", top_inversiones))
-    application.add_handler(CommandHandler("activar_alertas", activar_alertas))
-    application.add_handler(CommandHandler("desactivar_alertas", desactivar_alertas))
-    print("✅ Bot iniciado. Esperando comandos...")
+    application.add_handler(CommandHandler("estadisticas", estadisticas))
+
+    print(f"✅ Bot iniciado. Usuarios únicos hasta ahora: {len(usuarios_registrados)}")
     application.run_polling()
 
 if __name__ == "__main__":
