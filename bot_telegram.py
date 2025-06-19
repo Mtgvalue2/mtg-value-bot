@@ -1,9 +1,8 @@
 ﻿import os
 from dotenv import load_dotenv
 import logging
-from telegram.ext import Application, CommandHandler, ContextTypes
+from telegram.ext import Application, CommandHandler, ContextTypes, JobQueue
 from telegram import Update
-
 import numpy as np
 import matplotlib.pyplot as plt
 from io import BytesIO
@@ -29,7 +28,7 @@ cartas_seguimiento = ["Black Knight", "Force of Will", "Ancestral Recall"]
 intervalo_dias = 1
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    texto = "👋 ¡Hola! Soy MTGValueBot.\n\n"
+    texto = "👋 ¡Hola! Soy MTGValueBot.\n"
     texto += "📌 Comandos disponibles:\n"
     texto += "/buscar <nombre> [edición] – Consultar carta\n"
     texto += "/listar_ediciones <nombre> – Ver todas las ediciones\n"
@@ -37,52 +36,42 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     texto += "/seguimiento – Activar actualización automática\n"
     texto += "/detener_seguimiento – Detener búsqueda automática\n"
     texto += "/editar_lista add/remove <nombre> – Editar lista de seguimiento\n"
+    texto += "/top_inversiones – Ver las mejores inversiones de la semana"
     await update.message.reply_text(texto)
 
 async def buscar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
         await update.message.reply_text("Por favor, escribe el nombre de una carta. Ejemplo: /buscar Force of Will Unlimited")
         return
-
     nombre_completo = " ".join(context.args).strip()
     palabras = context.args
-
     # Detectar edición
     ediciones_clave = ["alpha", "beta", "unlimited", "promo", "foil", "modern", "commander", "standard"]
     edicion_input = None
     nombre = nombre_completo
-
     for i in range(len(palabras), 0, -1):
         posible_edicion = " ".join(palabras[i-1:])
         if any(ed in posible_edicion.lower() for ed in ediciones_clave):
             nombre = " ".join(palabras[:i-1]) or palabras[0]
             edicion_input = posible_edicion
             break
-
     resultado = buscar_carta(nombre, edicion_input)
-
     if "error" in resultado and "nombre" not in resultado:
         todas_ediciones = obtener_todas_ediciones(nombre)
         if not todas_ediciones:
             await update.message.reply_text("🚫 No se encontró la carta ni en línea ni en caché.")
             return
-
         texto = f"📚 Se encontraron {len(todas_ediciones)} ediciones para `{nombre}`:\n"
         for idx, edic in enumerate(todas_ediciones[:15], 1):
             texto += f"{idx}. {edic['edicion']} | ${float(edic['precio']):.2f}\n"
-
         texto += "\n👉 Usa `/buscar <nombre> <edición>` para ver detalles."
-
         await update.message.reply_text(texto, parse_mode="Markdown")
         return
-
     texto = f"🎴 *{resultado['nombre']}*\n"
     texto += f"📦 Edición: {resultado.get('edicion', 'No disponible')}\n"
     texto += f"💰 Precio Actual: ${round(float(resultado['precio']), 2):.2f}\n"
-
     if "rsi" in resultado and resultado["rsi"] is not None:
         texto += f"📊 RSI: {resultado['rsi']}\n"
-
     if "predicciones" in resultado and isinstance(resultado["predicciones"], list) and len(resultado["predicciones"]) >= 6:
         texto += "\n🔮 Predicción de precios futuros (6 meses):\n"
         for i, p in enumerate(resultado["predicciones"][:6], 1):
@@ -90,7 +79,6 @@ async def buscar(update: Update, context: ContextTypes.DEFAULT_TYPE):
             texto += f"{fecha_pred.strftime('%Y-%m-%d')}: ${float(p):.2f}\n"
     else:
         texto += "\n📉 Datos insuficientes para predicción."
-
     await update.message.reply_text(texto, parse_mode="Markdown")
 
     # Mostrar imagen si hay
@@ -109,20 +97,20 @@ async def buscar(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             x = np.array(range(len(resultado["precios"]))).reshape(-1, 1)
             y = np.array([float(p) for p in resultado["precios"]]).reshape(-1, 1)
-
-            plt.figure(figsize=(10, 5))
-            plt.plot(resultado["fechas"], y, label="Precio Real", marker='o', color="#00ffcc")
-            plt.xticks(rotation=45)
-            plt.title(f"Evolución de Precios - {resultado['nombre']}")
-            plt.xlabel("Fecha")
-            plt.ylabel("Precio USD")
-            plt.legend()
-            plt.grid(True)
+            plt.style.use('dark_background')
+            fig, ax = plt.subplots(figsize=(12, 6))
+            ax.plot(resultado["fechas"], y, label="Precio Real", marker='o', color="#00ffcc", linewidth=2, markersize=6)
+            ax.set_title(f"📈 Evolución de Precios - {resultado['nombre']}", fontsize=14, pad=20)
+            ax.set_xlabel("Fecha", fontsize=12)
+            ax.set_ylabel("Precio USD", fontsize=12)
+            ax.grid(True, linestyle='--', alpha=0.5)
+            ax.legend(loc='upper left')
+            plt.xticks(rotation=45, fontsize=10)
+            plt.yticks(fontsize=10)
             plt.tight_layout()
-            plt.savefig("grafico_historico.png")
+            plt.savefig("grafico_historico_mejorado.png", dpi=150, bbox_inches='tight')
             plt.close()
-
-            await update.message.reply_document(document=open("grafico_historico.png", "rb"), filename="grafico_historico.png")
+            await update.message.reply_document(document=open("grafico_historico_mejorado.png", "rb"))
         except Exception as e:
             await update.message.reply_text(f"⚠️ No se pudo generar el gráfico histórico: {str(e)}")
 
@@ -131,20 +119,20 @@ async def buscar(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             fechas_pred = [datetime.now() + timedelta(days=i*30) for i in range(1, 7)]
             predicciones = resultado["predicciones"][:6]
-
-            plt.figure(figsize=(10, 5))
-            plt.plot(fechas_pred, predicciones, 'r--', label="Predicción")
-            plt.title("🔮 Predicción de precios futuros (6 meses)")
-            plt.xlabel("Fecha")
-            plt.ylabel("Precio Estimado")
-            plt.grid(True)
-            plt.xticks(rotation=45)
-            plt.legend()
+            plt.style.use('dark_background')
+            fig, ax = plt.subplots(figsize=(12, 6))
+            ax.plot(fechas_pred, predicciones, 'r--', label="Predicción", linewidth=2)
+            ax.set_title("🔮 Predicción de precios futuros (6 meses)", fontsize=14, pad=20)
+            ax.set_xlabel("Fecha", fontsize=12)
+            ax.set_ylabel("Precio Estimado", fontsize=12)
+            ax.grid(True, linestyle='--', alpha=0.5)
+            ax.legend(loc='upper left')
+            plt.xticks(rotation=45, fontsize=10)
+            plt.yticks(fontsize=10)
             plt.tight_layout()
-            plt.savefig("grafico_prediccion.png")
+            plt.savefig("grafico_prediccion_mejorado.png", dpi=150, bbox_inches='tight')
             plt.close()
-
-            await update.message.reply_document(document=open("grafico_prediccion.png", "rb"), filename="grafico_prediccion.png")
+            await update.message.reply_document(document=open("grafico_prediccion_mejorado.png", "rb"))
         except Exception as e:
             await update.message.reply_text(f"⚠️ No se pudo generar el gráfico de predicción: {str(e)}")
 
@@ -152,18 +140,14 @@ async def listar_ediciones(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
         await update.message.reply_text("Por favor, escribe el nombre de una carta. Ejemplo: /listar_ediciones Black Knight")
         return
-
     nombre = " ".join(context.args).strip()
     todas_ediciones = obtener_todas_ediciones(nombre)
-
     if not todas_ediciones:
         await update.message.reply_text("🚫 No se encontraron ediciones.")
         return
-
     texto = f"📚 Se encontraron {len(todas_ediciones)} ediciones para `{nombre}`:\n"
     for idx, edic in enumerate(todas_ediciones[:15], 1):
         texto += f"{idx}. {edic['edicion']} | ${float(edic['precio']):.2f}\n"
-
     texto += "\n👉 Usa `/buscar <nombre> <edición>` para ver detalles."
     await update.message.reply_text(texto, parse_mode="Markdown")
 
@@ -171,15 +155,12 @@ async def ver_historial(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
         await update.message.reply_text("Por favor, escribe el nombre de una carta. Ejemplo: /ver_historial Black Knight")
         return
-
     nombre = " ".join(context.args).strip()
     historial = cargar_historial()
     claves = [k for k in historial.keys() if nombre.lower() in k.lower()]
-
     if not claves:
         await update.message.reply_text("📜 No hay datos guardados para esta carta.")
         return
-
     for clave in claves:
         registros = historial[clave]
         texto = f"📅 Historial para `{clave}`:\n"
@@ -192,45 +173,39 @@ async def seguir(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if seguimiento_activo:
         await update.message.reply_text("👀 Ya está activo el seguimiento.")
         return
-
     seguimiento_activo = True
     await update.message.reply_text("✅ Iniciando seguimiento automático...")
-
     job_queue = context.job_queue
     job_queue.run_repeating(monitor_seguimiento, interval=intervalo_dias * 86400, chat_id=update.effective_chat.id)
 
 async def monitor_seguimiento(context: ContextTypes.DEFAULT_TYPE):
     global cartas_seguimiento
     chat_id = context.job.chat_id
-
     for nombre in cartas_seguimiento:
         resultado = buscar_carta(nombre, None)
         if "error" in resultado or "nombre" not in resultado or resultado["precio"] <= 0.0:
             continue
-
         texto = f"⏳ *Actualización diaria* – {nombre}\n"
         texto += f"📦 Edición: {resultado.get('edicion', 'No disponible')}\n"
         texto += f"💰 Precio Actual: ${round(float(resultado['precio']), 2):.2f}"
-
         await context.bot.send_message(chat_id=chat_id, text=texto, parse_mode="Markdown")
-
         if "predicciones" in resultado and len(resultado["predicciones"]) >= 6:
             try:
                 fechas_pred = [datetime.now() + timedelta(days=i*30) for i in range(1, 7)]
                 predicciones = resultado["predicciones"][:6]
-
-                plt.figure(figsize=(10, 5))
-                plt.plot(fechas_pred, predicciones, 'r--', label="Predicción")
-                plt.title(f"🔮 Predicción de precios futuros - {nombre}")
-                plt.xlabel("Fecha")
-                plt.ylabel("Precio Estimado")
-                plt.grid(True)
-                plt.xticks(rotation=45)
-                plt.legend()
+                plt.style.use('dark_background')
+                fig, ax = plt.subplots(figsize=(12, 6))
+                ax.plot(fechas_pred, predicciones, 'r--', label="Predicción", linewidth=2)
+                ax.set_title(f"🔮 Predicción de precios futuros - {nombre}", fontsize=14, pad=20)
+                ax.set_xlabel("Fecha", fontsize=12)
+                ax.set_ylabel("Precio Estimado", fontsize=12)
+                ax.grid(True, linestyle='--', alpha=0.5)
+                ax.legend(loc='upper left')
+                plt.xticks(rotation=45, fontsize=10)
+                plt.yticks(fontsize=10)
                 plt.tight_layout()
-                plt.savefig("grafico_prediccion_auto.png")
+                plt.savefig("grafico_prediccion_auto.png", dpi=150, bbox_inches='tight')
                 plt.close()
-
                 await context.bot.send_document(chat_id=chat_id, document=open("grafico_prediccion_auto.png", "rb"))
             except Exception as e:
                 await context.bot.send_message(chat_id=chat_id, text=f"⚠️ No se pudo generar el gráfico: {str(e)}")
@@ -240,7 +215,6 @@ async def detener_seguimiento(update: Update, context: ContextTypes.DEFAULT_TYPE
     if not seguimiento_activo:
         await update.message.reply_text("🛑 No hay seguimiento activo.")
         return
-
     context.job_queue.stop()
     seguimiento_activo = False
     await update.message.reply_text("🛑 El seguimiento automático ha sido detenido.")
@@ -250,10 +224,8 @@ async def editar_lista(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
         await update.message.reply_text("Uso: `/editar_lista add <nombre>` o `/editar_lista remove <nombre>`", parse_mode="Markdown")
         return
-
     accion = context.args[0].lower()
     nombre = " ".join(context.args[1:]).strip()
-
     if accion == "add":
         if nombre not in cartas_seguimiento:
             cartas_seguimiento.append(nombre)
@@ -269,9 +241,43 @@ async def editar_lista(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text("Acción no reconocida. Usa `add` o `remove`.")
 
+async def top_inversiones(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Mostrar las 10 cartas con mayor aumento de precio esta semana"""
+    historial = cargar_historial()
+    if not historial:
+        await update.message.reply_text("📉 No hay datos suficientes para calcular inversiones.")
+        return
+    resultados = []
+    for clave in historial:
+        registros = historial[clave]
+        if len(registros) >= 2:
+            primer_registro = registros[0]
+            ultimo_registro = registros[-1]
+            fecha_inicio = datetime.strptime(primer_registro["fecha"], "%Y-%m-%d %H:%M")
+            fecha_fin = datetime.strptime(ultimo_registro["fecha"], "%Y-%m-%d %H:%M")
+            if (datetime.now() - fecha_fin).days <= 7:
+                precio_inicio = float(primer_registro["precio"])
+                precio_fin = float(ultimo_registro["precio"])
+                if precio_inicio > 0 and precio_fin > 0:
+                    cambio_porcentaje = ((precio_fin - precio_inicio) / precio_inicio) * 100
+                    resultados.append({
+                        "nombre": clave,
+                        "inicio": precio_inicio,
+                        "fin": precio_fin,
+                        "cambio": cambio_porcentaje
+                    })
+    resultados.sort(key=lambda x: x["cambio"], reverse=True)
+    if not resultados:
+        await update.message.reply_text("🔍 No hay movimientos significativos esta semana.")
+        return
+    texto = "📈 *Top 10 Inversiones MTG (última semana)*\n\n"
+    for idx, item in enumerate(resultados[:10], 1):
+        texto += f"{idx}. {item['nombre']}\n"
+        texto += f"   💸 De ${item['inicio']:.2f} → ${item['fin']:.2f} (+{item['cambio']:.2f}%)\n\n"
+    await update.message.reply_text(texto, parse_mode="Markdown")
+
 def main():
     application = Application.builder().token(os.getenv("TELEGRAM_BOT_TOKEN")).build()
-
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("buscar", buscar))
     application.add_handler(CommandHandler("listar_ediciones", listar_ediciones))
@@ -279,7 +285,7 @@ def main():
     application.add_handler(CommandHandler("seguimiento", seguir))
     application.add_handler(CommandHandler("detener_seguimiento", detener_seguimiento))
     application.add_handler(CommandHandler("editar_lista", editar_lista))
-
+    application.add_handler(CommandHandler("top_inversiones", top_inversiones))  # Nuevo comando
     print("✅ Bot iniciado. Esperando comandos...")
     application.run_polling()
 
