@@ -1,9 +1,9 @@
 ﻿import os
 import json
-from datetime import datetime, timedelta
+from datetime import datetime
+import requests
 import numpy as np
 from sklearn.linear_model import LinearRegression
-import requests
 from PIL import Image
 import matplotlib.pyplot as plt
 
@@ -76,43 +76,35 @@ def predecir_precio_futuro(precios):
         print(f"⚠️ Error al predecir precio: {str(e)}")
         return []
 
-def obtener_todas_ediciones(nombre):
-    """Obtener todas las ediciones disponibles de una carta"""
-    resultado_scryfall = buscar_en_scryfall(nombre)
-    if resultado_scryfall:
-        return resultado_scryfall
-
-    resultado_magic_api = buscar_en_magic_api(nombre)
-    if resultado_magic_api:
-        print("📚 Usando datos de magicthegathering.io...")
-        return resultado_magic_api
-
-    # Usar caché local como último recurso
-    cache = cargar_cache()
-    return cache.get(nombre.lower(), [])
-
-def buscar_en_scryfall(nombre):
-    """Buscar en Scryfall (primera opción principal)"""
+def buscar_carta(nombre, edicion=None):
+    """Buscar carta en Scryfall o usar caché local si falla"""
     try:
+        # Buscar en Scryfall
         params_fuzzy = {"fuzzy": nombre}
         response = requests.get("https://api.scryfall.com/cards/named",  params_fuzzy)
         if response.status_code != 200:
-            return None
+            raise Exception("No encontrado en Scryfall")
 
         datos = response.json()
 
+        # Obtener edición principal
+        usd = float(datos["prices"]["usd"]) if datos["prices"].get("usd") else 0.0
+        set_name = datos.get("set_name", "Sin Edición")
+
         todas_ediciones = [{
             "nombre": datos["name"],
-            "edicion": datos.get("set_name", "Sin Edición"),
-            "precio": float(datos["prices"]["usd"]) if datos["prices"].get("usd") else 0.0,
+            "edicion": set_name,
+            "precio": usd,
             "image_url": datos.get("image_uris", {}).get("normal")
         }]
 
+        # Obtener otras ediciones si hay
         if datos.get("prints_search_uri"):
-            response_prints = requests.get(datos["prints_search_uri"])
-            if response_prints.status_code == 200:
-                datos_prints = response_prints.json()
-                if datos_prints.get("object") == "list":
+            next_page = datos["prints_search_uri"]
+            while next_page and len(todas_ediciones) < 50:
+                response_prints = requests.get(next_page)
+                if response_prints.status_code == 200:
+                    datos_prints = response_prints.json()
                     for item in datos_prints["data"]:
                         if item["prices"].get("usd"):
                             todas_ediciones.append({
@@ -121,75 +113,18 @@ def buscar_en_scryfall(nombre):
                                 "precio": float(item["prices"]["usd"]),
                                 "image_url": item.get("image_uris", {}).get("normal")
                             })
-
-        ediciones_unicas = {}
-        for c in todas_ediciones:
-            ediciones_unicas[c["edicion"]] = c
-
-        return list(ediciones_unicas.values())
-
-    except Exception as e:
-        print(f"🚫 Fallo en Scryfall: {str(e)}")
-        return None
-
-def buscar_en_magic_api(nombre):
-    """Buscar en Magic The Gathering IO (respaldo)"""
-    try:
-        params = {"name": nombre}
-        response = requests.get("https://api.magicthegathering.io/v1/cards",  params=params)
-        if response.status_code != 200:
-            return None
-
-        datos = response.json().get("cards", [])
-        if not datos:
-            return None
-
-        todas_ediciones = []
-        for item in datos:
-            nombre_card = item.get("name")
-            set_name = item.get("set", "Sin Edición")
-            texto = item.get("text", "")
-            precio_text = ''.join(filter(str.isdigit, texto))
-            precio = float(precio_text) / 100 if precio_text else 0.0
-
-            todas_ediciones.append({
-                "nombre": nombre_card,
-                "edicion": set_name,
-                "precio": precio,
-                "image_url": item.get("imageUrl")
-            })
-
-        ediciones_unicas = {}
-        for c in todas_ediciones:
-            ediciones_unicas[c["edicion"]] = c
-
-        return list(ediciones_unicas.values())
-
-    except Exception as e:
-        print(f"⚠️ Error en magicthegathering.io: {str(e)}")
-        return None
-
-def buscar_carta(nombre, edicion=None):
-    """Buscar carta en Scryfall o usar caché local"""
-    try:
-        # Primero intentar con Scryfall
-        resultado_scryfall = buscar_en_scryfall(nombre)
-        if resultado_scryfall:
-            todas_ediciones = resultado_scryfall
-        else:
-            # Si falla, intentar con magicthegathering.io
-            resultado_backup = buscar_en_magic_api(nombre)
-            if resultado_backup:
-                print("📚 Usando datos de magicthegathering.io...")
-                todas_ediciones = resultado_backup
-            else:
-                # Finalmente, usar caché local
-                cache = cargar_cache()
-                if nombre.lower() in cache:
-                    print("📦 Usando caché local...")
-                    todas_ediciones = cache[nombre.lower()]
+                    next_page = datos_prints.get("next_page")
                 else:
-                    raise Exception("No se encontraron datos")
+                    break
+
+        # Eliminar duplicados por edición
+        ediciones_unicas = {}
+        for c in todas_ediciones:
+            key = f"{c['nombre']}|{c['edicion']}"
+            if key not in ediciones_unicas or c["precio"] > ediciones_unicas[key]["precio"]:
+                ediciones_unicas[key] = c
+
+        todas_ediciones = list(ediciones_unicas.values())
 
         resultado = []
         if edicion:
@@ -200,6 +135,7 @@ def buscar_carta(nombre, edicion=None):
             resultado = sorted([c for c in todas_ediciones if c["precio"] > 0.0], key=lambda x: x["precio"], reverse=True)[:1]
 
         res = resultado[0] if resultado else todas_ediciones[0]
+
         clave = f"{res['nombre']} - {res['edicion']}"
         historial = cargar_historial()
 
@@ -265,3 +201,104 @@ def buscar_carta(nombre, edicion=None):
             "precios": [],
             "image_url": None
         }
+
+def obtener_todas_ediciones(nombre):
+    """Obtener todas las ediciones disponibles de una carta"""
+    resultado_scryfall = buscar_en_scryfall(nombre)
+    if resultado_scryfall:
+        return resultado_scryfall
+
+    resultado_magic_api = buscar_en_magic_api(nombre)
+    if resultado_magic_api:
+        print("📚 Usando datos de magicthegathering.io...")
+        return resultado_magic_api
+
+    # Usar caché local como último recurso
+    cache = cargar_cache()
+    return cache.get(nombre.lower(), [])
+
+def buscar_en_scryfall(nombre):
+    """Buscar en Scryfall (primera opción principal)"""
+    try:
+        params_fuzzy = {"fuzzy": nombre}
+        response = requests.get("https://api.scryfall.com/cards/named",  params_fuzzy)
+        if response.status_code != 200:
+            return None
+
+        datos = response.json()
+
+        todas_ediciones = [{
+            "nombre": datos["name"],
+            "edicion": datos.get("set_name", "Sin Edición"),
+            "precio": float(datos["prices"]["usd"]) if datos["prices"].get("usd") else 0.0,
+            "image_url": datos.get("image_uris", {}).get("normal")
+        }]
+
+        if datos.get("prints_search_uri"):
+            next_page = datos["prints_search_uri"]
+            while next_page and len(todas_ediciones) < 50:
+                response_prints = requests.get(next_page)
+                if response_prints.status_code == 200:
+                    datos_prints = response_prints.json()
+                    for item in datos_prints["data"]:
+                        if item["prices"].get("usd"):
+                            todas_ediciones.append({
+                                "nombre": item["name"],
+                                "edicion": item.get("set_name", "Sin Edición"),
+                                "precio": float(item["prices"]["usd"]),
+                                "image_url": item.get("image_uris", {}).get("normal")
+                            })
+                    next_page = datos_prints.get("next_page")
+                else:
+                    break
+
+        ediciones_unicas = {}
+        for c in todas_ediciones:
+            key = f"{c['nombre']}|{c['edicion']}"
+            if key not in ediciones_unicas or c["precio"] > ediciones_unicas[key]["precio"]:
+                ediciones_unicas[key] = c
+
+        return list(ediciones_unicas.values())
+
+    except Exception as e:
+        print(f"🚫 Fallo en Scryfall: {str(e)}")
+        return None
+
+def buscar_en_magic_api(nombre):
+    """Buscar en Magic The Gathering IO (respaldo)"""
+    try:
+        params = {"name": nombre}
+        response = requests.get("https://api.magicthegathering.io/v1/cards",  params=params)
+        if response.status_code != 200:
+            return None
+
+        datos = response.json().get("cards", [])
+        if not datos:
+            return None
+
+        todas_ediciones = []
+        for item in datos:
+            nombre_card = item.get("name")
+            set_name = item.get("set", "Sin Edición")
+            texto = item.get("text", "")
+            precio_text = ''.join(filter(str.isdigit, texto))
+            precio = float(precio_text) / 100 if precio_text else 0.0
+
+            todas_ediciones.append({
+                "nombre": nombre_card,
+                "edicion": set_name,
+                "precio": precio,
+                "image_url": item.get("imageUrl")
+            })
+
+        ediciones_unicas = {}
+        for c in todas_ediciones:
+            key = f"{c['nombre']}|{c['edicion']}"
+            if key not in ediciones_unicas or c["precio"] > ediciones_unicas[key]["precio"]:
+                ediciones_unicas[key] = c
+
+        return list(ediciones_unicas.values())
+
+    except Exception as e:
+        print(f"⚠️ Error en magicthegathering.io: {str(e)}")
+        return None
