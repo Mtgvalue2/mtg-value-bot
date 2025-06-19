@@ -1,7 +1,7 @@
 ﻿import os
 from dotenv import load_dotenv
 import logging
-from telegram.ext import Application, CommandHandler, ContextTypes, JobQueue
+from telegram.ext import Application, CommandHandler, ContextTypes
 from telegram import Update
 import numpy as np
 import matplotlib.pyplot as plt
@@ -247,7 +247,11 @@ async def top_inversiones(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not historial:
         await update.message.reply_text("📉 No hay datos suficientes para calcular inversiones.")
         return
-    resultados = []
+    nombres = []
+    precios_inicio = []
+    precios_fin = []
+    porcentajes = []
+
     for clave in historial:
         registros = historial[clave]
         if len(registros) >= 2:
@@ -255,26 +259,51 @@ async def top_inversiones(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ultimo_registro = registros[-1]
             fecha_inicio = datetime.strptime(primer_registro["fecha"], "%Y-%m-%d %H:%M")
             fecha_fin = datetime.strptime(ultimo_registro["fecha"], "%Y-%m-%d %H:%M")
-            if (datetime.now() - fecha_fin).days <= 7:
-                precio_inicio = float(primer_registro["precio"])
-                precio_fin = float(ultimo_registro["precio"])
-                if precio_inicio > 0 and precio_fin > 0:
-                    cambio_porcentaje = ((precio_fin - precio_inicio) / precio_inicio) * 100
-                    resultados.append({
-                        "nombre": clave,
-                        "inicio": precio_inicio,
-                        "fin": precio_fin,
-                        "cambio": cambio_porcentaje
-                    })
-    resultados.sort(key=lambda x: x["cambio"], reverse=True)
-    if not resultados:
+            dias_cambio = (datetime.now() - fecha_fin).days
+            if dias_cambio > 7:
+                continue
+            precio_inicio = float(primer_registro["precio"])
+            precio_fin = float(ultimo_registro["precio"])
+            if precio_inicio > 0 and precio_fin > 0:
+                cambio_porcentaje = ((precio_fin - precio_inicio) / precio_inicio) * 100
+                if cambio_porcentaje >= 2.0:  # Solo si subió más del 2%
+                    nombres.append(clave.split(" - ")[0])
+                    precios_inicio.append(precio_inicio)
+                    precios_fin.append(precio_fin)
+                    porcentajes.append(cambio_porcentaje)
+
+    if not nombres:
         await update.message.reply_text("🔍 No hay movimientos significativos esta semana.")
         return
+
+    # Ordenar por porcentaje descendente
+    combinado = sorted(zip(nombres, precios_inicio, precios_fin, porcentajes), key=lambda x: x[3], reverse=True)[:10]
+
+    # Generar mensaje
     texto = "📈 *Top 10 Inversiones MTG (última semana)*\n\n"
-    for idx, item in enumerate(resultados[:10], 1):
-        texto += f"{idx}. {item['nombre']}\n"
-        texto += f"   💸 De ${item['inicio']:.2f} → ${item['fin']:.2f} (+{item['cambio']:.2f}%)\n\n"
+    for idx, (nombre, ini, fin, pct) in enumerate(combinado, 1):
+        texto += f"{idx}. {nombre}\n"
+        texto += f"   💸 De ${ini:.2f} → ${fin:.2f} (+{pct:.2f}%)\n\n"
     await update.message.reply_text(texto, parse_mode="Markdown")
+
+    # Gráfico: Porcentaje vs Precio
+    nombres_graf, inicio_graf, _, porcentaje_graf = zip(*combinado)
+    plt.style.use('dark_background')
+    fig, ax = plt.subplots(figsize=(12, 6))
+    scatter = ax.scatter(inicio_graf, porcentaje_graf, s=100, c=porcentaje_graf, cmap="viridis", alpha=0.9)
+    ax.set_title("📊 Top Cartas: Porcentaje de Subida vs Precio Actual", fontsize=14, pad=20)
+    ax.set_xlabel("Precio Actual (USD)", fontsize=12)
+    ax.set_ylabel("Cambio (%)", fontsize=12)
+    ax.grid(True, linestyle='--', alpha=0.5)
+    for i, nombre in enumerate(nombres_graf):
+        ax.text(inicio_graf[i], porcentaje_graf[i], nombre, fontsize=9, ha='right')
+    plt.colorbar(scatter, label="Cambio (%)")
+    plt.tight_layout()
+    plt.savefig("grafico_top_inversiones.png", dpi=150, bbox_inches='tight')
+    plt.close()
+
+    # Enviar gráfico
+    await update.message.reply_document(document=open("grafico_top_inversiones.png", "rb"))
 
 def main():
     application = Application.builder().token(os.getenv("TELEGRAM_BOT_TOKEN")).build()
@@ -285,7 +314,7 @@ def main():
     application.add_handler(CommandHandler("seguimiento", seguir))
     application.add_handler(CommandHandler("detener_seguimiento", detener_seguimiento))
     application.add_handler(CommandHandler("editar_lista", editar_lista))
-    application.add_handler(CommandHandler("top_inversiones", top_inversiones))  # Nuevo comando
+    application.add_handler(CommandHandler("top_inversiones", top_inversiones))
     print("✅ Bot iniciado. Esperando comandos...")
     application.run_polling()
 
