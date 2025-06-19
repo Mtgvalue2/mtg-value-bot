@@ -1,7 +1,7 @@
 ﻿import os
 from dotenv import load_dotenv
 import logging
-from telegram.ext import Application, CommandHandler, ContextTypes
+from telegram.ext import Application, CommandHandler, ContextTypes, JobQueue
 from telegram import Update
 import numpy as np
 import matplotlib.pyplot as plt
@@ -22,10 +22,11 @@ load_dotenv()
 # Importar funciones del backend
 from backend.mtg_core import buscar_carta, obtener_todas_ediciones, cargar_historial
 
-# Variables globales para seguimiento
+# Variables globales
 seguimiento_activo = False
 cartas_seguimiento = ["Black Knight", "Force of Will", "Ancestral Recall"]
 intervalo_dias = 1
+alertas_activas = False
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     texto = "👋 ¡Hola! Soy MTGValueBot.\n"
@@ -36,7 +37,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     texto += "/seguimiento – Activar actualización automática\n"
     texto += "/detener_seguimiento – Detener búsqueda automática\n"
     texto += "/editar_lista add/remove <nombre> – Editar lista de seguimiento\n"
-    texto += "/top_inversiones – Ver las mejores inversiones de la semana"
+    texto += "/top_inversiones – Ver las mejores inversiones de la semana\n"
+    texto += "/activar_alertas – Recibir notificaciones automáticas\n"
+    texto += "/desactivar_alertas – Dejar de recibir notificaciones"
     await update.message.reply_text(texto)
 
 async def buscar(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -45,7 +48,6 @@ async def buscar(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     nombre_completo = " ".join(context.args).strip()
     palabras = context.args
-    # Detectar edición
     ediciones_clave = ["alpha", "beta", "unlimited", "promo", "foil", "modern", "commander", "standard"]
     edicion_input = None
     nombre = nombre_completo
@@ -75,7 +77,7 @@ async def buscar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if "predicciones" in resultado and isinstance(resultado["predicciones"], list) and len(resultado["predicciones"]) >= 6:
         texto += "\n🔮 Predicción de precios futuros (6 meses):\n"
         for i, p in enumerate(resultado["predicciones"][:6], 1):
-            fecha_pred = datetime.now() + timedelta(days=i*30)
+            fecha_pred = datetime.strptime(p[0], "%Y-%m-%d") if isinstance(p[0], str) else datetime.now() + timedelta(days=i*30)
             texto += f"{fecha_pred.strftime('%Y-%m-%d')}: ${float(p):.2f}\n"
     else:
         texto += "\n📉 Datos insuficientes para predicción."
@@ -247,11 +249,7 @@ async def top_inversiones(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not historial:
         await update.message.reply_text("📉 No hay datos suficientes para calcular inversiones.")
         return
-    nombres = []
-    precios_inicio = []
-    precios_fin = []
-    porcentajes = []
-
+    resultados = []
     for clave in historial:
         registros = historial[clave]
         if len(registros) >= 2:
@@ -266,44 +264,108 @@ async def top_inversiones(update: Update, context: ContextTypes.DEFAULT_TYPE):
             precio_fin = float(ultimo_registro["precio"])
             if precio_inicio > 0 and precio_fin > 0:
                 cambio_porcentaje = ((precio_fin - precio_inicio) / precio_inicio) * 100
-                if cambio_porcentaje >= 2.0:  # Solo si subió más del 2%
-                    nombres.append(clave.split(" - ")[0])
-                    precios_inicio.append(precio_inicio)
-                    precios_fin.append(precio_fin)
-                    porcentajes.append(cambio_porcentaje)
-
-    if not nombres:
+                resultados.append({
+                    "nombre": clave.split(" - ")[0],
+                    "inicio": precio_inicio,
+                    "fin": precio_fin,
+                    "cambio": cambio_porcentaje
+                })
+    if not resultados:
         await update.message.reply_text("🔍 No hay movimientos significativos esta semana.")
         return
-
     # Ordenar por porcentaje descendente
-    combinado = sorted(zip(nombres, precios_inicio, precios_fin, porcentajes), key=lambda x: x[3], reverse=True)[:10]
-
-    # Generar mensaje
+    resultados.sort(key=lambda x: x["cambio"], reverse=True)
     texto = "📈 *Top 10 Inversiones MTG (última semana)*\n\n"
-    for idx, (nombre, ini, fin, pct) in enumerate(combinado, 1):
-        texto += f"{idx}. {nombre}\n"
-        texto += f"   💸 De ${ini:.2f} → ${fin:.2f} (+{pct:.2f}%)\n\n"
+    for idx, item in enumerate(resultados[:10], 1):
+        texto += f"{idx}. {item['nombre']}\n"
+        texto += f"   💸 De ${item['inicio']:.2f} → ${item['fin']:.2f} (+{item['cambio']:.2f}%)\n\n"
     await update.message.reply_text(texto, parse_mode="Markdown")
 
-    # Gráfico: Porcentaje vs Precio
-    nombres_graf, inicio_graf, _, porcentaje_graf = zip(*combinado)
-    plt.style.use('dark_background')
-    fig, ax = plt.subplots(figsize=(12, 6))
-    scatter = ax.scatter(inicio_graf, porcentaje_graf, s=100, c=porcentaje_graf, cmap="viridis", alpha=0.9)
-    ax.set_title("📊 Top Cartas: Porcentaje de Subida vs Precio Actual", fontsize=14, pad=20)
-    ax.set_xlabel("Precio Actual (USD)", fontsize=12)
-    ax.set_ylabel("Cambio (%)", fontsize=12)
-    ax.grid(True, linestyle='--', alpha=0.5)
-    for i, nombre in enumerate(nombres_graf):
-        ax.text(inicio_graf[i], porcentaje_graf[i], nombre, fontsize=9, ha='right')
-    plt.colorbar(scatter, label="Cambio (%)")
-    plt.tight_layout()
-    plt.savefig("grafico_top_inversiones.png", dpi=150, bbox_inches='tight')
-    plt.close()
+    # Gráfico opcional
+    if resultados:
+        nombres_graf, inicio_graf, fin_graf, porcentaje_graf = zip(*[(x["nombre"], x["inicio"], x["fin"], x["cambio"]) for x in resultados[:10]])
+        plt.style.use('dark_background')
+        fig, ax = plt.subplots(figsize=(12, 6))
+        scatter = ax.scatter(inicio_graf, porcentaje_graf, s=100, c=porcentaje_graf, cmap="viridis", alpha=0.9)
+        ax.set_title("📊 Top Cartas: Porcentaje de Subida vs Precio Actual", fontsize=14, pad=20)
+        ax.set_xlabel("Precio Actual (USD)", fontsize=12)
+        ax.set_ylabel("Cambio (%)", fontsize=12)
+        ax.grid(True, linestyle='--', alpha=0.5)
+        for i, nombre in enumerate(nombres_graf):
+            ax.text(inicio_graf[i], porcentaje_graf[i], nombre, fontsize=9, ha='right')
+        plt.colorbar(scatter, label="Cambio (%)")
+        plt.tight_layout()
+        plt.savefig("grafico_top_inversiones.png", dpi=150, bbox_inches='tight')
+        plt.close()
+        await update.message.reply_document(document=open("grafico_top_inversiones.png", "rb"))
 
+async def activar_alertas(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global alertas_activas
+    if alertas_activas:
+        await update.message.reply_text("🔔 Alertas ya están activas.")
+        return
+    alertas_activas = True
+    await update.message.reply_text("✅ Alertas automáticas activadas. Revisaré oportunidades cada 6 horas.")
+    job_queue = context.job_queue
+    job_queue.run_repeating(monitor_alertas, interval=21600, first=10, chat_id=update.effective_chat.id)
+
+async def monitor_alertas(context: ContextTypes.DEFAULT_TYPE):
+    historial = cargar_historial()
+    if not historial:
+        return
+    resultados = []
+    for clave in historial:
+        registros = historial[clave]
+        if len(registros) >= 2:
+            primer_registro = registros[0]
+            ultimo_registro = registros[-1]
+            fecha_fin = datetime.strptime(ultimo_registro["fecha"], "%Y-%m-%d %H:%M")
+            dias_cambio = (datetime.now() - fecha_fin).days
+            if dias_cambio <= 7:
+                precio_inicio = float(primer_registro["precio"])
+                precio_fin = float(ultimo_registro["precio"])
+                if precio_inicio > 0 and precio_fin > 0:
+                    cambio_porcentaje = ((precio_fin - precio_inicio) / precio_inicio) * 100
+                    if cambio_porcentaje >= 2.0:
+                        resultados.append({
+                            "nombre": clave.split(" - ")[0],
+                            "inicio": precio_inicio,
+                            "fin": precio_fin,
+                            "cambio": cambio_porcentaje
+                        })
+    if not resultados:
+        return
+    texto = "🔔 *Alerta Automática – Oportunidades detectadas*\n\n"
+    for idx, item in enumerate(resultados[:5], 1):
+        texto += f"{idx}. {item['nombre']}\n"
+        texto += f"   💸 De ${item['inicio']:.2f} → ${item['fin']:.2f} (+{item['cambio']:.2f}%)\n\n"
+    await context.bot.send_message(chat_id=context.job.chat_id, text=texto, parse_mode="Markdown")
     # Enviar gráfico
-    await update.message.reply_document(document=open("grafico_top_inversiones.png", "rb"))
+    if resultados:
+        nombres_graf, inicio_graf, _, porcentaje_graf = zip(*[(x["nombre"], x["inicio"], x["fin"], x["cambio"]) for x in resultados[:10]])
+        plt.style.use('dark_background')
+        fig, ax = plt.subplots(figsize=(12, 6))
+        scatter = ax.scatter(inicio_graf, porcentaje_graf, s=100, c=porcentaje_graf, cmap="viridis", alpha=0.9)
+        ax.set_title("📉 Alerta – Oportunidades Detectadas", fontsize=14, pad=20)
+        ax.set_xlabel("Precio Actual (USD)", fontsize=12)
+        ax.set_ylabel("Cambio (%)", fontsize=12)
+        ax.grid(True, linestyle='--', alpha=0.5)
+        for i, nombre in enumerate(nombres_graf):
+            ax.text(inicio_graf[i], porcentaje_graf[i], nombre, fontsize=9, ha='right')
+        plt.colorbar(scatter, label="Cambio (%)")
+        plt.tight_layout()
+        plt.savefig("grafico_alertas_auto.png", dpi=150, bbox_inches='tight')
+        plt.close()
+        await context.bot.send_document(chat_id=context.job.chat_id, document=open("grafico_alertas_auto.png", "rb"))
+
+async def desactivar_alertas(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global alertas_activas
+    if not alertas_activas:
+        await update.message.reply_text("🛑 Las alertas ya están desactivadas.")
+        return
+    context.job_queue.stop()
+    alertas_activas = False
+    await update.message.reply_text("🔕 Alertas automáticas desactivadas.")
 
 def main():
     application = Application.builder().token(os.getenv("TELEGRAM_BOT_TOKEN")).build()
@@ -315,6 +377,8 @@ def main():
     application.add_handler(CommandHandler("detener_seguimiento", detener_seguimiento))
     application.add_handler(CommandHandler("editar_lista", editar_lista))
     application.add_handler(CommandHandler("top_inversiones", top_inversiones))
+    application.add_handler(CommandHandler("activar_alertas", activar_alertas))
+    application.add_handler(CommandHandler("desactivar_alertas", desactivar_alertas))
     print("✅ Bot iniciado. Esperando comandos...")
     application.run_polling()
 
