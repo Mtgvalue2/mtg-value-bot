@@ -1,0 +1,24 @@
+﻿# Carpeta entorno virtual
+venv/
+__pycache__
+*.pyc
+*.db
+*.sqlite3
+
+# Archivos sensibles
+.env
+.env.local
+.env.development
+.env.test
+.env.production
+
+# Archivos de salida
+dist/
+build/
+
+# Logs
+*.log
+
+# Sistema
+.DS_Store
+Thumbs.db

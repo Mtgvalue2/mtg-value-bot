@@ -1,0 +1,7 @@
+﻿python-telegram-bot==22.1
+requests
+numpy
+scikit-learn
+pillow
+matplotlib
+python-dotenv
