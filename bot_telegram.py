@@ -1,5 +1,4 @@
 ﻿import os
-import json
 from dotenv import load_dotenv
 import logging
 from telegram.ext import Application, CommandHandler, ContextTypes, JobQueue
@@ -10,6 +9,7 @@ from io import BytesIO
 from PIL import Image
 import requests
 from datetime import datetime, timedelta
+import json
 
 # Configurar logging
 logging.basicConfig(
@@ -35,15 +35,16 @@ alertas_activas = False
 intervalo_dias = 1
 
 # Registro de usuarios
-if os.path.exists(USUARIOS_FILE):
-    with open(USUARIOS_FILE, "r") as f:
-        usuarios_registrados = set(json.load(f))
-else:
-    usuarios_registrados = set()
+if not os.path.exists(USUARIOS_FILE):
+    with open(USUARIOS_FILE, 'w') as f:
+        json.dump([], f)
+
+with open(USUARIOS_FILE, 'r') as f:
+    usuarios_registrados = set(json.load(f))
 
 def guardar_usuarios():
     """Guardar usuarios registrados en un archivo"""
-    with open(USUARIOS_FILE, "w") as f:
+    with open(USUARIOS_FILE, 'w') as f:
         json.dump(list(usuarios_registrados), f, indent=2)
 
 async def informar_admin(context: ContextTypes.DEFAULT_TYPE, mensaje: str):
@@ -59,13 +60,12 @@ async def informar_admin(context: ContextTypes.DEFAULT_TYPE, mensaje: str):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     nombre_usuario = update.effective_user.username or f"user_{chat_id}"
-    
-    # Registrar nuevo usuario
+
     if chat_id not in usuarios_registrados:
         usuarios_registrados.add(chat_id)
         guardar_usuarios()
-        logging.info(f"🟢 Nuevo usuario: {chat_id} ({nombre_usuario})")
-        await informar_admin(context, f"🆕 Usuario nuevo: {chat_id} ({nombre_usuario}) usó /start")
+        print(f"🟢 Nuevo usuario detectado: {chat_id} ({nombre_usuario})")
+        await informar_admin(context, f"🆕 Usuario nuevo: {chat_id} – @{nombre_usuario}")
 
     texto = "👋 ¡Hola! Soy MTGValueBot.\n"
     texto += "📌 Comandos disponibles:\n"
@@ -78,25 +78,25 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     texto += "/top_inversiones – Ver las mejores inversiones de la semana\n"
     texto += "/activar_alertas – Recibir notificaciones automáticas\n"
     texto += "/desactivar_alertas – Dejar de recibir notificaciones\n"
-    texto += "/estadisticas – Ver estadísticas del bot (solo administrador)"
+    texto += "/estadisticas – Ver uso del bot (solo administrador)"
     await update.message.reply_text(texto)
 
 async def buscar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     nombre_usuario = update.effective_user.username or f"user_{chat_id}"
-    logging.info(f"🧾 Usuario '{nombre_usuario}' ({chat_id}) usó /buscar con args: {context.args}")
-    await informar_admin(context, f"🧾 Usuario {chat_id} ({nombre_usuario}) usó /buscar `{context.args}`")
+    logging.info(f"🧾 Usuario '{nombre_usuario}' ({chat_id}) usó /buscar `{context.args}`")
+    await informar_admin(context, f"🧾 {nombre_usuario} ({chat_id}) usó /buscar `{context.args}`")
 
     if not context.args:
         await update.message.reply_text("Por favor, escribe el nombre de una carta. Ejemplo: /buscar Force of Will Unlimited")
         return
-    
+
     nombre_completo = " ".join(context.args).strip()
     palabras = context.args
     ediciones_clave = ["alpha", "beta", "unlimited", "promo", "foil", "modern", "commander", "standard"]
     edicion_input = None
     nombre = nombre_completo
-    
+
     for i in range(len(palabras), 0, -1):
         posible_edicion = " ".join(palabras[i-1:])
         if any(ed in posible_edicion.lower() for ed in ediciones_clave):
@@ -105,6 +105,7 @@ async def buscar(update: Update, context: ContextTypes.DEFAULT_TYPE):
             break
 
     resultado = buscar_carta(nombre, edicion_input)
+
     if "error" in resultado and "nombre" not in resultado:
         todas_ediciones = obtener_todas_ediciones(nombre)
         if not todas_ediciones:
@@ -190,17 +191,19 @@ async def buscar(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def listar_ediciones(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     nombre_usuario = update.effective_user.username or f"user_{chat_id}"
-    logging.info(f"🧾 Usuario '{nombre_usuario}' ({chat_id}) usó /listar_ediciones con args: {context.args}")
+    logging.info(f"🧾 Usuario '{nombre_usuario}' ({chat_id}) usó /listar_ediciones `{context.args}`")
     await informar_admin(context, f"🧾 {nombre_usuario} ({chat_id}) usó /listar_ediciones `{context.args}`")
 
     if not context.args:
         await update.message.reply_text("Por favor, escribe el nombre de una carta. Ejemplo: /listar_ediciones Black Knight")
         return
+
     nombre = " ".join(context.args).strip()
     todas_ediciones = obtener_todas_ediciones(nombre)
     if not todas_ediciones:
         await update.message.reply_text("🚫 No se encontraron ediciones.")
         return
+
     texto = f"📚 Se encontraron {len(todas_ediciones)} ediciones para `{nombre}`:\n"
     for idx, edic in enumerate(todas_ediciones[:15], 1):
         texto += f"{idx}. {edic['edicion']} | ${float(edic['precio']):.2f}\n"
@@ -210,18 +213,20 @@ async def listar_ediciones(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def ver_historial(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     nombre_usuario = update.effective_user.username or f"user_{chat_id}"
-    logging.info(f"🧾 Usuario '{nombre_usuario}' ({chat_id}) usó /ver_historial con args: {context.args}")
+    logging.info(f"🧾 Usuario '{nombre_usuario}' ({chat_id}) usó /ver_historial `{context.args}`")
     await informar_admin(context, f"🧾 {nombre_usuario} ({chat_id}) usó /ver_historial `{context.args}`")
 
     if not context.args:
         await update.message.reply_text("Por favor, escribe el nombre de una carta. Ejemplo: /ver_historial Black Knight")
         return
+
     nombre = " ".join(context.args).strip()
     historial = cargar_historial()
     claves = [k for k in historial.keys() if nombre.lower() in k.lower()]
     if not claves:
         await update.message.reply_text("📜 No hay datos guardados para esta carta.")
         return
+
     for clave in claves:
         registros = historial[clave]
         texto = f"📅 Historial para `{clave}`:\n"
@@ -239,6 +244,7 @@ async def seguir(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if seguimiento_activo:
         await update.message.reply_text("👀 Ya está activo el seguimiento.")
         return
+
     seguimiento_activo = True
     await update.message.reply_text("✅ Iniciando seguimiento automático...")
     job_queue = context.job_queue
@@ -286,6 +292,7 @@ async def detener_seguimiento(update: Update, context: ContextTypes.DEFAULT_TYPE
     if not seguimiento_activo:
         await update.message.reply_text("🛑 No hay seguimiento activo.")
         return
+
     context.job_queue.stop()
     seguimiento_activo = False
     await update.message.reply_text("🛑 El seguimiento automático ha sido detenido.")
@@ -299,9 +306,6 @@ async def editar_lista(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     accion = context.args[0].lower()
     nombre = " ".join(context.args[1:]).strip()
-    logging.info(f"🧾 Usuario '{nombre_usuario}' ({chat_id}) usó /editar_lista {accion} {nombre}")
-    await informar_admin(context, f"🧾 {nombre_usuario} ({chat_id}) editó la lista: {accion} {nombre}")
-
     if accion == "add":
         if nombre not in cartas_seguimiento:
             cartas_seguimiento.append(nombre)
@@ -337,10 +341,13 @@ async def top_inversiones(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ultimo_registro = registros[-1]
             fecha_fin = datetime.strptime(ultimo_registro["fecha"], "%Y-%m-%d %H:%M")
             dias_cambio = (datetime.now() - fecha_fin).days
+
             if dias_cambio > 7:
                 continue
+
             precio_inicio = float(primer_registro["precio"])
             precio_fin = float(ultimo_registro["precio"])
+
             if precio_inicio > 0 and precio_fin > 0:
                 cambio_porcentaje = ((precio_fin - precio_inicio) / precio_inicio) * 100
                 resultados_ascenso.append({
@@ -366,6 +373,7 @@ async def top_inversiones(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Gráfico opcional
     nombres_graf, inicio_graf, fin_graf, porcentaje_graf = [], [], [], []
+
     for item in resultados_ascenso[:10]:
         nombres_graf.append(item["nombre"])
         inicio_graf.append(item["inicio"])
@@ -375,7 +383,7 @@ async def top_inversiones(update: Update, context: ContextTypes.DEFAULT_TYPE):
     plt.style.use('dark_background')
     fig, ax = plt.subplots(figsize=(12, 6))
     scatter = ax.scatter(inicio_graf, porcentaje_graf, s=100, c=porcentaje_graf, cmap="viridis", alpha=0.9)
-    ax.set_title("📊 Top Cartas: Porcentaje de Subida vs Precio Actual", fontsize=14, pad=20)
+    ax.set_title("📊 Top Cartas – Porcentaje de Subida vs Precio Actual", fontsize=14, pad=20)
     ax.set_xlabel("Precio Actual (USD)", fontsize=12)
     ax.set_ylabel("Cambio (%)", fontsize=12)
     ax.grid(True, linestyle='--', alpha=0.5)
