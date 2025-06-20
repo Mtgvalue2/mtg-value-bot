@@ -32,6 +32,7 @@ from backend.mtg_core import buscar_carta, obtener_todas_ediciones, cargar_histo
 seguimiento_activo = False
 cartas_seguimiento = ["Black Knight", "Force of Will", "Ancestral Recall"]
 alertas_activas = False
+intervalo_alertas = 21600  # cada 6 horas
 intervalo_dias = 1
 
 # Registro de usuarios
@@ -90,7 +91,7 @@ async def buscar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
         await update.message.reply_text("Por favor, escribe el nombre de una carta. Ejemplo: /buscar Force of Will Unlimited")
         return
-
+    
     nombre_completo = " ".join(context.args).strip()
     palabras = context.args
     ediciones_clave = ["alpha", "beta", "unlimited", "promo", "foil", "modern", "commander", "standard"]
@@ -105,7 +106,6 @@ async def buscar(update: Update, context: ContextTypes.DEFAULT_TYPE):
             break
 
     resultado = buscar_carta(nombre, edicion_input)
-
     if "error" in resultado and "nombre" not in resultado:
         todas_ediciones = obtener_todas_ediciones(nombre)
         if not todas_ediciones:
@@ -197,7 +197,7 @@ async def listar_ediciones(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
         await update.message.reply_text("Por favor, escribe el nombre de una carta. Ejemplo: /listar_ediciones Black Knight")
         return
-
+    
     nombre = " ".join(context.args).strip()
     todas_ediciones = obtener_todas_ediciones(nombre)
     if not todas_ediciones:
@@ -244,7 +244,7 @@ async def seguir(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if seguimiento_activo:
         await update.message.reply_text("👀 Ya está activo el seguimiento.")
         return
-
+    
     seguimiento_activo = True
     await update.message.reply_text("✅ Iniciando seguimiento automático...")
     job_queue = context.job_queue
@@ -334,6 +334,7 @@ async def top_inversiones(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     resultados_ascenso = []
+
     for clave in historial:
         registros = historial[clave]
         if len(registros) >= 2:
@@ -342,20 +343,19 @@ async def top_inversiones(update: Update, context: ContextTypes.DEFAULT_TYPE):
             fecha_fin = datetime.strptime(ultimo_registro["fecha"], "%Y-%m-%d %H:%M")
             dias_cambio = (datetime.now() - fecha_fin).days
 
-            if dias_cambio > 7:
-                continue
+            if dias_cambio <= 7:
+                precio_inicio = float(primer_registro["precio"])
+                precio_fin = float(ultimo_registro["precio"])
 
-            precio_inicio = float(primer_registro["precio"])
-            precio_fin = float(ultimo_registro["precio"])
-
-            if precio_inicio > 0 and precio_fin > 0:
-                cambio_porcentaje = ((precio_fin - precio_inicio) / precio_inicio) * 100
-                resultados_ascenso.append({
-                    "nombre": clave.split(" - ")[0],
-                    "inicio": precio_inicio,
-                    "fin": precio_fin,
-                    "cambio": cambio_porcentaje
-                })
+                if precio_inicio > 0 and precio_fin > 0:
+                    cambio_porcentaje = ((precio_fin - precio_inicio) / precio_inicio) * 100
+                    if cambio_porcentaje >= 0.5:
+                        resultados_ascenso.append({
+                            "nombre": clave.split(" - ")[0],
+                            "inicio": precio_inicio,
+                            "fin": precio_fin,
+                            "cambio": cambio_porcentaje
+                        })
 
     if not resultados_ascenso:
         await update.message.reply_text("🔍 No hay movimientos significativos esta semana.")
@@ -373,7 +373,6 @@ async def top_inversiones(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Gráfico opcional
     nombres_graf, inicio_graf, fin_graf, porcentaje_graf = [], [], [], []
-
     for item in resultados_ascenso[:10]:
         nombres_graf.append(item["nombre"])
         inicio_graf.append(item["inicio"])
@@ -396,10 +395,85 @@ async def top_inversiones(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_document(document=open("grafico_top_inversiones.png", "rb"))
 
+async def activar_alertas(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global alertas_activas
+    if alertas_activas:
+        await update.message.reply_text("🔔 Alertas ya están activas.")
+        return
+    alertas_activas = True
+    await update.message.reply_text("✅ Alertas automáticas activadas. Revisaré oportunidades cada 6 horas.")
+    job_queue = context.job_queue
+    job_queue.run_repeating(monitor_alertas, interval=intervalo_alertas, first=10, chat_id=update.effective_chat.id)
+
+async def monitor_alertas(context: ContextTypes.DEFAULT_TYPE):
+    historial = cargar_historial()
+    if not historial:
+        return
+    
+    resultados = []
+    for clave in historial:
+        registros = historial[clave]
+        if len(registros) >= 2:
+            primer_registro = registros[0]
+            ultimo_registro = registros[-1]
+            fecha_fin = datetime.strptime(ultimo_registro["fecha"], "%Y-%m-%d %H:%M")
+            dias_cambio = (datetime.now() - fecha_fin).days
+            
+            if dias_cambio <= 7:
+                precio_inicio = float(primer_registro["precio"])
+                precio_fin = float(ultimo_registro["precio"])
+                
+                if precio_inicio > 0 and precio_fin > 0:
+                    cambio_porcentaje = ((precio_fin - precio_inicio) / precio_inicio) * 100
+                    if cambio_porcentaje >= 0.5:
+                        resultados.append({
+                            "nombre": clave.split(" - ")[0],
+                            "inicio": precio_inicio,
+                            "fin": precio_fin,
+                            "cambio": cambio_porcentaje
+                        })
+
+    if not resultados:
+        return
+
+    texto = "🔔 *Alerta Automática – Oportunidades detectadas*\n\n"
+    for idx, item in enumerate(resultados[:5], 1):
+        texto += f"{idx}. {item['nombre']}\n"
+        texto += f"   💸 De ${item['inicio']:.2f} → ${item['fin']:.2f} (+{item['cambio']:.2f}%)\n\n"
+
+    await context.bot.send_message(chat_id=context.job.chat_id, text=texto, parse_mode="Markdown")
+
+    # Enviar gráfico
+    if resultados:
+        nombres_graf, inicio_graf, fin_graf, porcentaje_graf = zip(*[(x["nombre"], x["inicio"], x["fin"], x["cambio"]) for x in resultados[:10]]
+        plt.style.use('dark_background')
+        fig, ax = plt.subplots(figsize=(12, 6))
+        scatter = ax.scatter(inicio_graf, porcentaje_graf, s=100, c=porcentaje_graf, cmap="viridis", alpha=0.9)
+        ax.set_title("📉 Alerta – Oportunidades Detectadas", fontsize=14, pad=20)
+        ax.set_xlabel("Precio Actual (USD)", fontsize=12)
+        ax.set_ylabel("Cambio (%)", fontsize=12)
+        ax.grid(True, linestyle='--', alpha=0.5)
+        for i, nombre in enumerate(nombres_graf):
+            ax.text(inicio_graf[i], porcentaje_graf[i], nombre, fontsize=9, ha='right')
+        plt.colorbar(scatter, label="Cambio (%)")
+        plt.tight_layout()
+        plt.savefig("grafico_alertas_auto.png", dpi=150, bbox_inches='tight')
+        plt.close()
+        await context.bot.send_document(chat_id=context.job.chat_id, document=open("grafico_alertas_auto.png", "rb"))
+
+async def desactivar_alertas(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global alertas_activas
+    if not alertas_activas:
+        await update.message.reply_text("🛑 Las alertas ya están desactivadas.")
+        return
+    context.job_queue.stop()
+    alertas_activas = False
+    await update.message.reply_text("🔕 Alertas automáticas desactivadas.")
+
 async def estadisticas(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     nombre_usuario = update.effective_user.username or f"user_{chat_id}"
-    logging.info(f"🧾 Usuario '{nombre_usuario}' ({chat_id}) usó /estadisticas")
+    logging.info(f"🧾 {nombre_usuario} ({chat_id}) usó /estadisticas")
     await informar_admin(context, f"🧾 {nombre_usuario} ({chat_id}) consultó /estadisticas")
 
     admin_id = os.getenv("ADMIN_CHAT_ID")
@@ -430,6 +504,8 @@ def main():
     application.add_handler(CommandHandler("detener_seguimiento", detener_seguimiento))
     application.add_handler(CommandHandler("editar_lista", editar_lista))
     application.add_handler(CommandHandler("top_inversiones", top_inversiones))
+    application.add_handler(CommandHandler("activar_alertas", activar_alertas))
+    application.add_handler(CommandHandler("desactivar_alertas", desactivar_alertas))
     application.add_handler(CommandHandler("estadisticas", estadisticas))
 
     print(f"✅ Bot iniciado. Usuarios únicos hasta ahora: {len(usuarios_registrados)}")
