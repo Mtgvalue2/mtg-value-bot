@@ -511,7 +511,7 @@
     {
       "nombre": "Force of Will",
       "edicion": "Dominaria Remastered",
-      "precio": 59.41,
+      "precio": 58.8,
       "image_url": "https://cards.scryfall.io/normal/front/8/9/89f612d6-7c59-4a7b-a87d-45f789e88ba5.jpg?1675199280"
     },
     {
@@ -523,7 +523,7 @@
     {
       "nombre": "Force of Will",
       "edicion": "Eternal Masters",
-      "precio": 54.85,
+      "precio": 55.66,
       "image_url": "https://cards.scryfall.io/normal/front/e/b/ebc01ab4-d89a-4d25-bf54-6aed33772f4b.jpg?1580013954"
     },
     {
@@ -535,7 +535,7 @@
     {
       "nombre": "Force of Will",
       "edicion": "Alliances",
-      "precio": 60.33,
+      "precio": 59.24,
       "image_url": "https://cards.scryfall.io/normal/front/9/a/9a879b60-4381-447d-8a5a-8e0b6a1d49ca.jpg?1562769672"
     }
   ],
@@ -6771,6 +6771,70 @@
       "edicion": "Unlimited Edition",
       "precio": 21.97,
       "image_url": "https://cards.scryfall.io/normal/front/7/4/743e0f1e-55ab-429a-b9f1-769b008ad06a.jpg?1559592079"
+    }
+  ],
+  "\"ancestral": [
+    {
+      "nombre": "Ancestral Mask",
+      "edicion": "Eternal Masters",
+      "precio": 2.35,
+      "image_url": "https://cards.scryfall.io/normal/front/c/7/c7a19fc5-20f3-48d2-8c12-e012d3b302e7.jpg?1580014720"
+    },
+    {
+      "nombre": "Ancestral Mask",
+      "edicion": "The List",
+      "precio": 1.67,
+      "image_url": "https://cards.scryfall.io/normal/front/1/e/1e89f357-c508-4cde-8584-79d49e471f6c.jpg?1573513015"
+    },
+    {
+      "nombre": "Ancestral Mask",
+      "edicion": "Wilds of Eldraine Commander",
+      "precio": 3.13,
+      "image_url": "https://cards.scryfall.io/normal/front/0/d/0d75292c-cc03-4c40-be01-a8dba66b761c.jpg?1692935396"
+    },
+    {
+      "nombre": "Ancestral Mask",
+      "edicion": "Mercadian Masques",
+      "precio": 3.67,
+      "image_url": "https://cards.scryfall.io/normal/front/1/2/1203f98a-fb6e-4f16-88e3-553eba177450.jpg?1562379417"
+    }
+  ],
+  "recall\"": [
+    {
+      "nombre": "Recall",
+      "edicion": "Masters Edition III",
+      "precio": 0.0,
+      "image_url": "https://cards.scryfall.io/normal/front/d/d/dd82d1f8-12bb-4b71-9a25-76a9dcb68345.jpg?1562941724"
+    },
+    {
+      "nombre": "Recall",
+      "edicion": "Classic Sixth Edition",
+      "precio": 0.63,
+      "image_url": "https://cards.scryfall.io/normal/front/7/9/791af96f-1de9-46f2-a1e5-93921c4905c7.jpg?1562819256"
+    },
+    {
+      "nombre": "Recall",
+      "edicion": "Fifth Edition",
+      "precio": 1.44,
+      "image_url": "https://cards.scryfall.io/normal/front/d/c/dc53dd70-e2a7-4203-ae00-240694d7220e.jpg?1562594470"
+    },
+    {
+      "nombre": "Recall",
+      "edicion": "Pro Tour Collector Set",
+      "precio": 2.49,
+      "image_url": "https://cards.scryfall.io/normal/front/e/c/eca2b290-a59b-4961-8e06-78d73fcd0b58.jpg?1562939364"
+    },
+    {
+      "nombre": "Recall",
+      "edicion": "Chronicles",
+      "precio": 0.33,
+      "image_url": "https://cards.scryfall.io/normal/front/8/4/84b8de7a-c055-4031-a359-24526b6e6354.jpg?1562921829"
+    },
+    {
+      "nombre": "Recall",
+      "edicion": "Legends",
+      "precio": 103.5,
+      "image_url": "https://cards.scryfall.io/normal/front/3/3/33296718-0625-4422-a65c-b21cf99c52ec.jpg?1562858258"
     }
   ]
 }

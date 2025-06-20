@@ -108,6 +108,11 @@
       "fecha": "2025-06-19 11:33",
       "precio": 2699.72,
       "edicion": "Collectors' Edition"
+    },
+    {
+      "fecha": "2025-06-20 19:13",
+      "precio": 2699.72,
+      "edicion": "Collectors' Edition"
     }
   ],
   "Island - Tarkir: Dragonstorm": [
@@ -431,6 +436,27 @@
       "fecha": "2025-06-19 11:32",
       "precio": 99.87,
       "edicion": "Unlimited Edition"
+    }
+  ],
+  "Force of Will - Double Masters": [
+    {
+      "fecha": "2025-06-20 19:15",
+      "precio": 151.18,
+      "edicion": "Double Masters"
+    }
+  ],
+  "Ancestral Mask - Mercadian Masques": [
+    {
+      "fecha": "2025-06-20 19:15",
+      "precio": 3.67,
+      "edicion": "Mercadian Masques"
+    }
+  ],
+  "Recall - Legends": [
+    {
+      "fecha": "2025-06-20 19:15",
+      "precio": 103.5,
+      "edicion": "Legends"
     }
   ]
 }
