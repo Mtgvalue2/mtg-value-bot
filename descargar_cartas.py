@@ -3,25 +3,9 @@ import sqlite3
 from datetime import datetime
 import time
 
-# Conectar a la base de datos SQLite
+# Conectar a la base de datos
 conn = sqlite3.connect("mtg_cards.db")
 cursor = conn.cursor()
-
-# Crear tablas si no existen
-cursor.execute('''
-    CREATE TABLE IF NOT EXISTS cartas (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        nombre TEXT NOT NULL,
-        edicion TEXT,
-        coleccion TEXT,
-        precio REAL,
-        fecha TEXT,
-        image_url TEXT,
-        rsi REAL
-    )
-''')
-
-conn.commit()
 
 def guardar_carta_en_db(nombre, edicion, coleccion, precio, image_url):
     cursor.execute('''
@@ -45,8 +29,7 @@ def obtener_todas_las_cartas():
             nombre = card["name"]
             edicion = card.get("set_name", "No disponible")
             coleccion = card.get("set", "No disponible")
-            precios = card.get("prices", {})
-            precio = float(precios.get("usd", 0.01)) if precios else 0.01
+            precio = float(card["prices"].get("usd", 0.01)) if "prices" in card else 0.01
             image_url = card.get("image_uris", {}).get("normal", "")
 
             # Guardar en la base de datos 
